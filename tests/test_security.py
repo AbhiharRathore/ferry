@@ -117,3 +117,15 @@ def test_database_url_gets_the_psycopg_driver():
     for given in ("postgres://u:p@h/db", "postgresql://u:p@h/db"):
         assert Settings(database_url=given).database_url == "postgresql+psycopg://u:p@h/db"
     assert Settings(database_url="postgresql+psycopg://u:p@h/db").database_url == "postgresql+psycopg://u:p@h/db"
+
+
+def test_pinned_request_keeps_host_and_sni():
+    from app.security import pinned_request
+
+    url, headers, ext = pinned_request("https://hooks.example.com:8443/in?x=1", ["93.184.216.34"])
+    assert url == "https://93.184.216.34:8443/in?x=1"
+    assert headers == {"Host": "hooks.example.com:8443"}
+    assert ext == {"sni_hostname": "hooks.example.com"}
+    url, _, ext = pinned_request("http://hooks.example.com/in", ["2606:2800:220:1::1"])
+    assert url == "http://[2606:2800:220:1::1]/in" and ext == {}
+    assert pinned_request("http://127.0.0.1:9/x", []) == ("http://127.0.0.1:9/x", {}, {})

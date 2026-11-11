@@ -6,7 +6,7 @@ import ipaddress
 import secrets
 import socket
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 API_KEY_PREFIX = "fry_"
 SECRET_PREFIX = "whsec_"
@@ -72,12 +72,16 @@ def _ip_is_public(ip: ipaddress._BaseAddress) -> bool:
     return ip.is_global and not ip.is_multicast
 
 
-def check_url(url: str, *, allow_private: bool, allow_http: bool, resolve=socket.getaddrinfo) -> None:
+def check_url(url: str, *, allow_private: bool, allow_http: bool, resolve=None) -> list[str]:
     """Reject URLs that would make the server call itself or an internal network.
 
     Every address the host resolves to must be public; one private answer is
     enough to refuse (an attacker controls their own DNS). The worker re-checks
     before each delivery, because DNS can change after registration.
+
+    Returns the vetted addresses so the caller can connect to one of them
+    instead of resolving again (see pinned_request). Empty when private targets
+    are allowed, since nothing was checked.
     """
     parts = urlsplit(url)
     if parts.scheme not in ("https", "http") or (parts.scheme == "http" and not allow_http):
@@ -87,7 +91,8 @@ def check_url(url: str, *, allow_private: bool, allow_http: bool, resolve=socket
     if parts.username or parts.password:
         raise UnsafeURL("URL must not contain credentials")
     if allow_private:
-        return
+        return []
+    resolve = resolve or socket.getaddrinfo  # looked up at call time so tests can patch it
     try:
         infos = resolve(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80), proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
@@ -98,3 +103,23 @@ def check_url(url: str, *, allow_private: bool, allow_http: bool, resolve=socket
     for addr in addresses:
         if not _ip_is_public(ipaddress.ip_address(addr.split("%")[0])):
             raise UnsafeURL(f"{parts.hostname} resolves to a non-public address ({addr})")
+    return sorted(addresses)
+
+
+def pinned_request(url: str, addresses: list[str]) -> tuple[str, dict[str, str], dict]:
+    """Rewrite url to connect to a vetted IP while still talking to the original host.
+
+    Closes the DNS-rebinding gap: if the HTTP client resolved the name again, a
+    hostile DNS server could answer with a private address after the check passed.
+    The Host header keeps virtual hosting working, and for https the original name
+    is used for SNI and certificate verification. Returns (url, headers, extensions).
+    """
+    if not addresses:
+        return url, {}, {}
+    parts = urlsplit(url)
+    ip = addresses[0]
+    host = f"[{ip}]" if ":" in ip else ip
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    headers = {"Host": parts.netloc.rsplit("@", 1)[-1]}
+    extensions = {"sni_hostname": parts.hostname} if parts.scheme == "https" else {}
+    return urlunsplit(parts._replace(netloc=netloc)), headers, extensions

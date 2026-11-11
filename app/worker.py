@@ -26,7 +26,7 @@ from .config import Settings, get_settings
 from .db import session_factory
 from .logs import configure_logging
 from .retry import backoff_seconds
-from .security import UnsafeURL, check_url, signature_headers
+from .security import UnsafeURL, check_url, pinned_request, signature_headers
 
 log = logging.getLogger("ferry.worker")
 
@@ -110,16 +110,18 @@ def send(client: httpx.Client, job: Job, settings: Settings) -> Outcome:
 
     try:
         # Re-check at send time: the host's DNS may have changed since registration.
-        check_url(job.url, allow_private=settings.allow_private_targets, allow_http=settings.allow_http)
+        vetted = check_url(job.url, allow_private=settings.allow_private_targets, allow_http=settings.allow_http)
     except UnsafeURL as exc:
         return done(error=f"blocked: {exc}")
 
+    # Connect to the address we just vetted rather than letting httpx resolve again.
+    target, host_header, extensions = pinned_request(job.url, vetted)
     body = body_for(job)
     headers = {"Content-Type": "application/json", "User-Agent": "Ferry-Webhooks/1.0",
-               **signature_headers(job.secret, str(job.message_id), body)}
+               **host_header, **signature_headers(job.secret, str(job.message_id), body)}
     try:
         # No redirects: a 3xx to an internal address would sidestep the SSRF check.
-        resp = client.post(job.url, content=body, headers=headers, follow_redirects=False)
+        resp = client.post(target, content=body, headers=headers, follow_redirects=False, extensions=extensions)
     except httpx.TimeoutException:
         return done(error=f"timeout after {settings.request_timeout_seconds:g}s")
     except httpx.HTTPError as exc:

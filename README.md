@@ -7,7 +7,7 @@ can't be delivered, and refuses to call internal networks.
 Built with FastAPI, PostgreSQL (also used as the job queue), SQLAlchemy 2, Alembic and httpx.
 
 **Live API docs:** https://ferry-api-0c58.onrender.com/docs (free tier: the first request after 15 idle minutes takes about a minute).
-60 tests run against a real Postgres.
+62 tests run against a real Postgres.
 
 ```
 client ──POST /v1/messages──▶ API ──one transaction──▶ Postgres: messages + deliveries
@@ -28,7 +28,7 @@ worker × N ──claim due rows (FOR UPDATE SKIP LOCKED)───────�
 | Retry storms after an outage | Exponential backoff with jitter: about base·2ⁿ⁻¹ seconds, capped, half of it random | `app/retry.py` |
 | A receiver is down for hours | Circuit breaker: after N consecutive failures the endpoint is disabled and its deliveries wait; re-enabling resumes them. `410 Gone` disables at once | `record()`, `PATCH /v1/endpoints/{id}` |
 | Receivers must know a request is genuine | `Ferry-Signature: v1=HMAC(secret, id.timestamp.body)` plus `Ferry-Timestamp` for a replay window. Verification uses a constant-time compare | `app/security.py` |
-| SSRF: a customer registers `http://169.254.169.254/` or `localhost` | URLs must resolve only to public addresses, checked at registration **and** before every send (DNS can change). Redirects aren't followed | `check_url()` |
+| SSRF: a customer registers `http://169.254.169.254/` or `localhost` | URLs must resolve only to public addresses, checked at registration **and** before every send. The worker then connects to the exact IP it checked (Host header and TLS SNI keep the original name), so a DNS answer that changes between check and connect can't redirect it. Redirects aren't followed | `check_url()`, `pinned_request()` |
 | Leaked database | API keys are stored as SHA-256 hashes (they are 32 random bytes, so a slow hash adds nothing) and shown once | `app/security.py` |
 
 ## Run it
@@ -126,9 +126,6 @@ and visible only in its dashboard. Free-tier caveats: the service sleeps after 1
 
 ## Known limits
 
-- The SSRF check resolves DNS, then httpx resolves again when connecting. A hostile DNS server
-  could answer differently in between (DNS rebinding). Closing that fully means connecting to
-  the checked IP directly; not done yet.
 - Endpoint signing secrets are stored in plain text because the worker needs them to sign.
   Encrypting them at rest with a key from the environment is the next step.
 - One worker sends its batch sequentially; scale by running more workers.

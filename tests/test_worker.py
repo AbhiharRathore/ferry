@@ -223,3 +223,39 @@ def test_embedded_worker_delivers_without_a_separate_process(receiver, monkeypat
             time.sleep(0.1)
         assert delivery(c, auth, msg["deliveries"][0]["id"])["status"] == "succeeded"
     assert len(receiver.requests) == 1
+
+
+def test_dns_rebinding_cannot_redirect_the_request(monkeypatch):
+    """The name resolves to a public IP when checked and to 127.0.0.1 afterwards.
+    The worker must connect to the vetted IP, resolving only once."""
+    import socket
+    import uuid as uuidlib
+    from datetime import datetime, timezone
+
+    import httpx
+
+    from app.worker import Job, send
+
+    answers = iter(["93.184.216.34", "127.0.0.1", "127.0.0.1"])
+    calls = []
+
+    def fake_getaddrinfo(host, port, *a, **kw):
+        calls.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (next(answers), port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    seen = {}
+
+    def handler(request):
+        seen.update(host=request.url.host, header=request.headers["host"], ext=dict(request.extensions))
+        return httpx.Response(204)
+
+    job = Job(uuidlib.uuid4(), uuidlib.uuid4(), 1, uuidlib.uuid4(), uuidlib.uuid4(), "e", {}, datetime.now(timezone.utc),
+              "https://hooks.example.com/in", "whsec_x")
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        out = send(client, job, worker_settings(allow_private_targets=False))
+    assert out.status_code == 204
+    assert calls == ["hooks.example.com"]           # resolved exactly once
+    assert seen["host"] == "93.184.216.34"          # connected to the vetted address
+    assert seen["header"] == "hooks.example.com"    # virtual hosting preserved
+    assert seen["ext"].get("sni_hostname") == "hooks.example.com"
