@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ferry
+      POSTGRES_PASSWORD: ferry
+      POSTGRES_DB: ferry
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ferry"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment: &env
+      FERRY_DATABASE_URL: postgresql+psycopg://ferry:ferry@db:5432/ferry
+      FERRY_ADMIN_TOKEN: ${FERRY_ADMIN_TOKEN:-local-dev-admin-token-change-me}
+      FERRY_ALLOW_PRIVATE_TARGETS: ${FERRY_ALLOW_PRIVATE_TARGETS:-false}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: python -m app.worker
+    environment: *env
+    depends_on:
+      api:
+        condition: service_started
