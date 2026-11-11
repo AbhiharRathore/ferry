@@ -109,3 +109,11 @@ def test_backoff_has_jitter():
 def test_backoff_rejects_attempt_zero():
     with pytest.raises(ValueError):
         backoff_seconds(0, 5, 60)
+
+
+def test_database_url_gets_the_psycopg_driver():
+    from app.config import Settings
+
+    for given in ("postgres://u:p@h/db", "postgresql://u:p@h/db"):
+        assert Settings(database_url=given).database_url == "postgresql+psycopg://u:p@h/db"
+    assert Settings(database_url="postgresql+psycopg://u:p@h/db").database_url == "postgresql+psycopg://u:p@h/db"

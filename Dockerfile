@@ -14,4 +14,5 @@ RUN useradd --create-home --uid 10001 ferry
 USER ferry
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Apply migrations, then serve. PORT is set by hosts such as Render; 8000 locally.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

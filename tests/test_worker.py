@@ -203,3 +203,23 @@ def test_endpoint_stats(client, receiver, factory, http):
     assert stats["attempts_last_24h"] == 3
     assert stats["success_rate_last_24h"] == round(2 / 3, 4)
     assert stats["p50_latency_ms_last_24h"] is not None
+
+
+def test_embedded_worker_delivers_without_a_separate_process(receiver, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import get_settings
+    from app.main import create_app
+
+    monkeypatch.setenv("FERRY_EMBEDDED_WORKER", "true")
+    monkeypatch.setenv("FERRY_POLL_INTERVAL_SECONDS", "0.05")
+    get_settings.cache_clear()
+    with TestClient(create_app()) as c:  # entering the client runs the lifespan, which starts the thread
+        auth = make_app(c)
+        make_endpoint(c, auth, receiver.url)
+        msg = send_message(c, auth).json()
+        deadline = time.time() + 10
+        while time.time() < deadline and delivery(c, auth, msg["deliveries"][0]["id"])["status"] != "succeeded":
+            time.sleep(0.1)
+        assert delivery(c, auth, msg["deliveries"][0]["id"])["status"] == "succeeded"
+    assert len(receiver.requests) == 1

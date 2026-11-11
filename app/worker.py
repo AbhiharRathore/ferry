@@ -210,12 +210,23 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
+    run_loop(lambda: stopping, settings)
+
+
+def run_loop(should_stop, settings: Settings) -> None:
+    """Poll for work until should_stop() is true. Shared by the CLI worker and the embedded one."""
     factory = session_factory()
     with httpx.Client(timeout=settings.request_timeout_seconds) as client:
         log.info("worker started")
-        while not stopping:
-            if run_once(factory, client, settings) == 0:
+        while not should_stop():
+            try:
+                if run_once(factory, client, settings) == 0:
+                    time.sleep(settings.poll_interval_seconds)
+            except Exception:
+                # A database blip must not kill the loop; log it and try again shortly.
+                log.exception("worker iteration failed")
                 time.sleep(settings.poll_interval_seconds)
+        log.info("worker stopped")
 
 
 if __name__ == "__main__":

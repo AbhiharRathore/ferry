@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +11,17 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://ferry:ferry@localhost:5433/ferry"
     admin_token: str = Field(default="", description="Bearer token for POST /v1/apps")
+    # Run the delivery worker as a thread inside the API (for hosts without worker processes).
+    embedded_worker: bool = False
+
+    @field_validator("database_url")
+    @classmethod
+    def _psycopg_driver(cls, v: str) -> str:
+        # Hosts hand out postgres:// or postgresql:// URLs; SQLAlchemy needs the driver named.
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+psycopg://" + v[len(prefix):]
+        return v
 
     # Outbound safety. Off by default: endpoints may not point at private networks.
     allow_private_targets: bool = False
