@@ -5,6 +5,8 @@ subscribed endpoint, retries with exponential backoff when receivers fail, dead-
 can't be delivered, and refuses to call internal networks.
 
 Built with FastAPI, PostgreSQL (also used as the job queue), SQLAlchemy 2, Alembic and httpx.
+
+**Live API docs:** https://ferry-api-0c58.onrender.com/docs (free tier: the first request after 15 idle minutes takes about a minute).
 60 tests run against a real Postgres.
 
 ```
